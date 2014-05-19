@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<NativeLibraries>
+	<Linux32><Path>lib/lwjgl-native/linux</Path></Linux32>
+	<Linux64><Path>lib/lwjgl-native/linux</Path></Linux64>
+	<MacOSX><Path>lib/lwjgl-native/macosx</Path></MacOSX>
+	<Win32><Path>lib/lwjgl-native/windows</Path></Win32>
+	<Win64><Path>lib/lwjgl-native/windows</Path></Win64>
+</NativeLibraries>

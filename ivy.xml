@@ -1,0 +1,9 @@
+<ivy-module version="1.0">
+    <info organisation="The Siris Team" module="editor"/>
+    <dependencies>
+        <dependency org="org.lwjgl.lwjgl" name="lwjgl" rev="2.9.0" />
+        <dependency org="org.lwjgl.lwjgl" name="lwjgl_util" rev="2.9.0" />
+        <dependency org="org.lwjgl.lwjgl" name="lwjgl-platform" rev="2.9.0" />
+    </dependencies>
+</ivy-module>
+

@@ -22,10 +22,9 @@ package simx.components.sound
 
 import simplex3d.math.float._
 import simx.core.helper.Execute
-import simx.core.svaractor.{SVar, SVarActor}
 import simx.core.ontology.{types, GroundedSymbol, Symbols}
 import simx.core.worldinterface.eventhandling.{Event, EventDescription, EventHandler}
-import simx.core.entity.description.{EntityAspect, SValSet}
+import simx.core.entity.description.{NamedSValSet, EntityAspect, SValSet}
 import simx.core.entity.typeconversion.ConvertibleTrait
 import simx.core.entity.component.EntityConfigLayer
 import simx.core.entity.Entity
@@ -37,7 +36,12 @@ import simx.core.ontology.types.SoundProperties
  * User: dwiebusch
  */
 
-class LWJGLSoundComponent(name : Symbol) extends SVarActor with SoundComponent with EntityConfigLayer with EventHandler{
+case class LWJGLSoundComponentAspect(name : Symbol) extends SoundComponentAspect[LWJGLSoundComponent](name){
+  def getCreateParams: NamedSValSet = NamedSValSet(aspectType)
+  def getComponentFeatures: Set[ConvertibleTrait[_]] = Set()
+}
+
+class LWJGLSoundComponent(name : Symbol) extends SoundComponent(name) with EntityConfigLayer with EventHandler{
   private type AudioData           = String
   protected var knownEntities      = Set[Entity]()
   protected var positions          = Map[Entity, ConstVec3]()
@@ -56,9 +60,12 @@ class LWJGLSoundComponent(name : Symbol) extends SVarActor with SoundComponent w
   protected var playingMap         = Map[Entity, List[ALSource]]()
 
 
-  //! the components name (used for lookup functionality)
-  def componentName =
-    name
+  //override protected implicit val actorContext = this
+
+  protected def requestInitialConfigValues(toProvide: Set[ConvertibleTrait[_]], aspect: EntityAspect, e: Entity) =
+    SValSet()
+
+  protected def finalizeConfiguration(e: Entity){}
 
   /**
    * (re)configure the component
@@ -66,18 +73,20 @@ class LWJGLSoundComponent(name : Symbol) extends SVarActor with SoundComponent w
    */
   protected def configure(params: SValSet) {
     //println("[Setting Listener Pos]")
-    params.getFirstValueFor(types.User).collect{
-      case user => user.get(types.ViewPlatform).collect{
-        case pos => ALListener.connect(pos)
-      }
-    }
+    params.getFirstValueFor(types.User).collect{ case user => ALListener.connect(user, types.ViewPlatform) }
   }
 
   override protected def startUp() {
     //println("[Start Up SoundComp]")
     ALListener.setPosition(Vec3.Zero)
     ALListener.setOrientation(Vec3(0,0,-1), Vec3(0,1,0))
-    requestEvent(SoundEvents.sound)
+    SoundEvents.sound.observe{ e =>
+      if (e.get(types.AudioFile).isDefined && e.affectedEntities.nonEmpty){
+        val entity = e.affectedEntities.head
+        playFor(entity, e.get(types.AudioFile).get, e.get(types.Transformation).getOrElse(Mat4.Identity)(3).xyz, 1)
+      } else
+        playAll(e)
+    }
   }
 
   private def playSoundAtWith(e : Entity, s : types.AudioFile.dataType, pos : ConstVec3, andThen : => Any = {},
@@ -93,14 +102,17 @@ class LWJGLSoundComponent(name : Symbol) extends SVarActor with SoundComponent w
           sound.setFadingDistance(refDist, maxDist)
           sound.play()
           playingMap = playingMap.updated(e, sound :: playingMap.getOrElse(e, Nil))
-          waitForEnd(sound, andThen)
+          waitForEnd(e, sound, andThen)
         case None => // Error
       }
     }
   }
 
-  private def waitForEnd(source :  ALSource, andThen : => Any){
-    if (source.isPlaying) addJobIn(50){ waitForEnd(source, andThen) } else andThen
+  private def waitForEnd(e : Entity, source :  ALSource, andThen : => Any){
+    if (source.isPlaying) addJobIn(50){ waitForEnd(e, source, andThen) } else {
+      playingMap = playingMap.updated(e, playingMap.getOrElse(e, Nil).filterNot(_.equals(source)))
+      andThen
+    }
   }
 
   protected def loadSound(fName : String){
@@ -149,6 +161,7 @@ class LWJGLSoundComponent(name : Symbol) extends SVarActor with SoundComponent w
     }
 
     cParams.semantics match {
+      case Symbols.component     => defaultTask()
       case Symbols.audioFile     =>  // simply load a file and connect it with the entity
         cParams.getFirstValueFor(types.OpenAlProps).collect{
           case sp : SoundProperties => updateFor(e, sp)
@@ -179,7 +192,7 @@ class LWJGLSoundComponent(name : Symbol) extends SVarActor with SoundComponent w
         cParams.getFirstValueFor(types.EventDescription).collect{
           case eDesc => cParams.getFirstValueFor(types.AudioFile).collect{
             case sound =>
-              requestEvent(eDesc.restrictedBy{ case ev => ev.affectedEntities.contains(e) })
+              eDesc.restrictedBy{ case ev => ev.affectedEntities.contains(e) }.observe(handleSoundEvent)
               eventMapping = eventMapping.updated(e,
                 eventMapping.getOrElse(e, Map[EventDescription, types.AudioFile.dataType]()).updated(eDesc, sound))
           }
@@ -193,7 +206,9 @@ class LWJGLSoundComponent(name : Symbol) extends SVarActor with SoundComponent w
           case eDesc => cParams.getFirstValueFor(types.Container).collect{
             case params => cParams.getFirstValueFor(types.AudioFile).collect{
               case file =>
-                requestEvent(eDesc)
+                eDesc.restrictedBy{
+                  case event => event.affectedEntities.forall(_.containsSVars(types.Material))
+                }.observe(handleSoundEvent)
                 val list = (e, params, file) :: combinationMapping.getOrElse(eDesc.name, Nil)
                 combinationMapping = combinationMapping + ( eDesc.name -> list)
             }
@@ -220,26 +235,21 @@ class LWJGLSoundComponent(name : Symbol) extends SVarActor with SoundComponent w
       case Symbols.material =>
       case Symbols.openAlProps =>
       case Symbols.enabled =>
+      case Symbols.component =>
       case Symbols.viewPlatform =>
-        e.get(types.ViewPlatform).collect{ case posSVar =>
-
-          posSVar.get{  trafo => ALListener.setPosition(trafo(3).xyz)}
-          posSVar.observe{ trafo => ALListener.setPosition(trafo(3).xyz)}
+        e.observe(types.ViewPlatform).first { trafo =>
+          ALListener.setPosition(trafo(3).xyz)
           //TODO: check new simplex values
-          posSVar.get{  trafo => ALListener.setOrientation(Vec3(-trafo.m20,-trafo.m21,-trafo.m22), Vec3(trafo.m10,trafo.m11,trafo.m12))}
-          posSVar.observe{ trafo => ALListener.setOrientation(Vec3(-trafo.m20,-trafo.m21,-trafo.m22), Vec3(trafo.m10,trafo.m11,trafo.m12)) }
-
+          ALListener.setOrientation(Vec3(-trafo.m20, -trafo.m21, -trafo.m22), Vec3(trafo.m10, trafo.m11, trafo.m12))
+        }
+        e.get(types.ViewPlatform).first { trafo =>
+          ALListener.setPosition(trafo(3).xyz)
+          //TODO: check new simplex values
+          ALListener.setOrientation(Vec3(-trafo.m20, -trafo.m21, -trafo.m22), Vec3(trafo.m10, trafo.m11, trafo.m12))
         }
       case Symbols.audioFile =>
-        e.get(types.OpenAlProps).collect {
-          case propSVar =>
-            propSVar.observe { prop => updateFor(e, prop) }
-        }
-        e.get(types.Position).collect {
-          case posSVar =>
-            posSVar.observe{ pos => positions = positions.updated(e,
-              pos)}
-        }
+        e.observe(types.OpenAlProps).first { updateFor(e, _) }
+        e.observe(types.Position).first{ pos => positions = positions.updated(e, pos) }
         //        e.get(types.Transformation).collect{ case posSVar =>
         //          println("SETTING SOUND TRANS")
         //          posSVar.get{     trafo =>
@@ -247,20 +257,17 @@ class LWJGLSoundComponent(name : Symbol) extends SVarActor with SoundComponent w
         //            println(trafo(3).xyz) }
         //          posSVar.observe{ trafo => positions = positions.updated( e, trafo(3).xyz )
         //        }
-        e.get(types.AudioFile).collect{ case fileSVar =>
-          fileSVar.get{     file => audioFiles = audioFiles.updated(e, file ) }
-          fileSVar.observe{ file => audioFiles = audioFiles.updated(e, file ) }
-        }
-        e.get(types.Enabled).collect { case sVar =>
-          sVar.get{ playIt(e, sVar) _ }
-          sVar.observe{ playIt(e, sVar) }
-        }
+        e.observe(types.AudioFile).first{ file => audioFiles = audioFiles.updated(e, file ) }
+        e.get(types.AudioFile).first{ file => audioFiles = audioFiles.updated(e, file ) }
+
+        e.observe(types.Enabled).first( value => playIt(e)(value) )
+        e.get(types.Enabled).first( value => playIt(e)(value) )
       case sem =>
         println("sound component: unknown semantics in entityConfigComplete " + sem.value)
     }
   }
 
-  private def playIt(e : Entity, sVar : SVar[Boolean])(really : Boolean){
+  private def playIt(e : Entity)(really : Boolean){
     if (really) audioFiles.get(e) match {
       case Some(file) =>
         playFor(e, file, positions.get(e).getOrElse(Vec3.Zero), 1f)
@@ -284,7 +291,7 @@ class LWJGLSoundComponent(name : Symbol) extends SVarActor with SoundComponent w
   }
 
   private def playFor(entity : Entity, sound : types.AudioFile.dataType, center : ConstVec3, speedFactor : Float){
-    playSoundAtWith(entity, sound, center, entity.get(types.Enabled).headOption.collect{ case s => s.set(false) },
+    playSoundAtWith(entity, sound, center, entity.getSVars(types.Enabled).headOption.collect{ case s => s._2.set(false) },
       gains.get(entity).getOrElse(0.5F) * speedFactor,
       loops.get(entity).getOrElse(false), pitches.get(entity).getOrElse(1.0F),
       maxDistances.get(entity).getOrElse(Float.MaxValue), refDistances.get(entity).getOrElse(1.0F))
@@ -292,12 +299,12 @@ class LWJGLSoundComponent(name : Symbol) extends SVarActor with SoundComponent w
 
   private def playAll(e : Event) {
     val entity = e.affectedEntities.headOption.getOrElse(null)
-    val fileTasks = e.affectedEntities.map(_.get(types.AudioFile)).map{
-      t => if (t.nonEmpty) t.head.get(_ : String => Any)  else (handler : String  => Any ) => handler("") : Unit
+    val fileTasks = e.affectedEntities.map(_.getSVars(types.AudioFile)).map{
+      t => if (t.nonEmpty) t.head._2.get(_ : String => Unit)  else (handler : String  => Any ) => handler("") : Unit
     }
     if (fileTasks.isEmpty) return
-    val posTasks  = e.affectedEntities.map(_.get(types.Transformation)).map{
-      t => if (t.nonEmpty) t.head.get(_ : ConstMat4 => Any) else (handler : ConstMat4  => Any ) => handler(Mat4.Identity) : Unit
+    val posTasks  = e.affectedEntities.map(_.getSVars(types.Transformation)).map{
+      t => if (t.nonEmpty) t.head._2.get(_ : ConstMat4 => Unit) else (handler : ConstMat4  => Any ) => handler(Mat4.Identity) : Unit
     }
     Execute allSerialized2 fileTasks.toSeq exec {
       files => Execute allSerialized2 posTasks.toSeq exec {
@@ -317,20 +324,22 @@ class LWJGLSoundComponent(name : Symbol) extends SVarActor with SoundComponent w
 
 
   private def createTasks[T](e : Event, toGet : ConvertibleTrait[T] ) =
-    e.affectedEntities.map(_.get(toGet)).filter(_.nonEmpty).map( x => x.head.get(_ : T => Any)).toSeq
+    e.affectedEntities.map(_.getSVars(toGet)).filter(_.nonEmpty).map( x => x.head._2.get(_ : T => Unit)).toSeq
 
 
-  def handleEvent(e: Event) {
-    // plain sound rendering
-    if (e.name equals Symbols.sound){
-      if (e.get(types.AudioFile).isDefined && e.affectedEntities.nonEmpty){
-        val entity = e.affectedEntities.head
-        playFor(entity, e.get(types.AudioFile).get, e.get(types.Transformation).getOrElse(Mat4.Identity)(3).xyz, 1)
-      } else
-        playAll(e)
-    }
+  private var recentEvents = List[(Long, Event)]()
+  private val filterTime = 50L
+
+  private def handleSoundEvent(e: Event) {
+    // some filtering
+    val now = System.currentTimeMillis()
+    recentEvents = recentEvents.filter(_._1 > now - filterTime)
+    if (recentEvents.exists{that => that._2.name.equals(e.name) && that._2.affectedEntities.equals(e.affectedEntities)})
+      return
+    recentEvents = (e.get(types.Time).getOrElse(now) -> e) :: recentEvents
+
     // eventbased sound rendering (single entity)
-    else if (e.affectedEntities.size == 1)
+    if (e.affectedEntities.size == 1)
       eventMapping.get(e.affectedEntities.head).collect {
         case m => m.find( _._1 matches e ) match {
           case Some((_, soundFile)) =>
@@ -341,7 +350,7 @@ class LWJGLSoundComponent(name : Symbol) extends SVarActor with SoundComponent w
       }
     // combined rendering
     else {
-      val mappings = combinationMapping.get(e.name).getOrElse(List[(Entity, SValSet, String)]())
+      val mappings = combinationMapping.getOrElse(e.name, Nil)
       val tasks = createTasks(e, types.Material)
       var speedVal = 1f
       e.get(types.Factor).collect {
@@ -350,7 +359,7 @@ class LWJGLSoundComponent(name : Symbol) extends SVarActor with SoundComponent w
       }
       if (tasks.nonEmpty) Execute allSerialized2 tasks exec {
         results =>
-        //println(results)
+          //println(results)
           findCombination(mappings, results).collect{
             case (entity, sound) =>
               //println(sound)

@@ -21,10 +21,12 @@
 package simx.components.sound
 
 import simplex3d.math.float._
-import simx.core.svaractor.{SVarActor, SVar}
 import simx.core.ontology.types
 import org.lwjgl.BufferUtils
 import org.lwjgl.openal.AL10._
+import simx.core.entity.Entity
+import simx.core.entity.typeconversion.ConvertibleTrait
+import simx.core.svaractor.unifiedaccess.{EntityUpdateHandling, ObservableAccessSet}
 
 
 /**
@@ -33,14 +35,15 @@ import org.lwjgl.openal.AL10._
  * Time: 15:07
  */
 object ALListener{
-  private var posSVar : Option[SVar[types.Transformation.dataType]] = None
+  private var posAccess : Option[ObservableAccessSet[types.Transformation.dataType, types.Transformation.dataType]] = None
   private var position = Vec3.Zero
 
-  def connect(sVar : SVar[types.Transformation.dataType])(implicit actorContext : SVarActor){
-    posSVar.collect{ case oldVal => oldVal.ignore() }
-    posSVar = Some(sVar)
-    sVar.get(x => setPosition(x))
-    sVar.observe(setPosition)
+  def connect(entity : Entity, sVar : ConvertibleTrait[types.Transformation.dataType])(implicit actorContext : EntityUpdateHandling){
+    val access = entity.observe(sVar)
+//    posAccess.collect{ case x => x.ignore() }
+    posAccess = Some(access)
+    entity.observe(sVar).first( pos => setPosition(pos))
+    entity.get(sVar).first( pos => setPosition(pos))
   }
 
   def setPosition(pos : ConstMat4){

@@ -23,6 +23,8 @@ package simx.components.sound
 import simx.core.component.Component
 import simx.core.worldinterface.eventhandling.EventDescription
 import simx.core.ontology.Symbols
+import scala.reflect.ClassTag
+import simx.core.entity.component.ComponentAspect
 
 /**
  * User: dwiebusch
@@ -30,9 +32,14 @@ import simx.core.ontology.Symbols
  * Time: 19:08
  */
 
-trait SoundComponent extends Component{
+object SoundComponent{
   def componentType = simx.core.ontology.Symbols.sound
 }
+
+abstract class SoundComponent(name : Symbol) extends Component(name, SoundComponent.componentType)
+
+abstract class SoundComponentAspect[T <: Component : ClassTag](name : Symbol, args : Any*)
+  extends ComponentAspect[T](SoundComponent.componentType, name, args)
 
 object SoundEvents{
   val sound = new EventDescription(Symbols.sound)

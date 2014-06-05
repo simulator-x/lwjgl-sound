@@ -37,7 +37,7 @@ abstract class SoundAspect( aspectType : GroundedSymbol, targets : List[Symbol] 
   extends EntityAspect(Symbols.sound, aspectType, targets)
 
 // for plain audio entities or to add a specific sound to an entity
-case class SoundFile(fileName : String, soundprops : types.SoundProperties, pos : ConstVec3)
+case class SoundFile(fileName : String, soundprops : types.SoundProperties, pos : ConstVec3, playOnCreation : Boolean = false)
   extends SoundAspect(Symbols.audioFile)
 {
   def getFeatures =
@@ -47,7 +47,7 @@ case class SoundFile(fileName : String, soundprops : types.SoundProperties, pos 
     getFeatures
 
   def getCreateParams =
-    NamedSValSet(aspectType, types.AudioFile(fileName), types.Enabled(false), types.OpenAlProps(soundprops), types.Position(pos))
+    NamedSValSet(aspectType, types.AudioFile(fileName), types.Enabled(playOnCreation), types.OpenAlProps(soundprops), types.Position(pos))
 }
 
 // add an sound to the entity for events like explosions

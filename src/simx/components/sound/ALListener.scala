@@ -40,7 +40,7 @@ object ALListener{
 
   def connect(entity : Entity, sVar : ConvertibleTrait[types.Transformation.dataType])(implicit actorContext : EntityUpdateHandling){
     val access = entity.observe(sVar)
-    posAccess.collect{ case x => x.ignore() }
+//    posAccess.collect{ case x => x.ignore() }
     posAccess = Some(access)
     entity.observe(sVar).first( pos => setPosition(pos))
     entity.get(sVar).first( pos => setPosition(pos))

@@ -42,8 +42,8 @@ object ALListener{
     val access = entity.observe(sVar)
 //    posAccess.collect{ case x => x.ignore() }
     posAccess = Some(access)
-    entity.observe(sVar).first( pos => setPosition(pos))
-    entity.get(sVar).first( pos => setPosition(pos))
+    entity.observe(sVar).head( pos => setPosition(pos))
+    entity.get(sVar).head( pos => setPosition(pos))
   }
 
   def setPosition(pos : ConstMat4){

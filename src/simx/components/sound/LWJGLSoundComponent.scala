@@ -41,6 +41,20 @@ case class LWJGLSoundComponentAspect(name : Symbol) extends SoundComponentAspect
   def getComponentFeatures: Set[ConvertibleTrait[_]] = Set()
 }
 
+case class EntityMatcher(e : Entity) extends Serializable{
+  val matchEvent : PartialFunction[Event, Boolean] = {
+    case ev : Event => ev.affectedEntities.contains(e)
+  }
+}
+
+case class MaterialMatcher() extends Serializable{
+  val matchEvent : PartialFunction[Event, Boolean] = {
+    case event => event.affectedEntities.forall(_.containsSVars(types.Material))
+  }
+}
+
+
+
 class LWJGLSoundComponent(name : Symbol) extends SoundComponent(name) with EntityConfigLayer with EventHandler{
   private type AudioData           = String
   protected var knownEntities      = Set[Entity]()
@@ -120,7 +134,7 @@ class LWJGLSoundComponent(name : Symbol) extends SoundComponent(name) with Entit
   }
 
   protected def stopSoundsFor( e : Entity ){
-    playingMap.get(e).getOrElse(Nil).foreach(_.stop())
+    playingMap.getOrElse(e, Nil).foreach(_.stop())
     playingMap = playingMap.filterNot(_._1 == e)
   }
 
@@ -135,6 +149,10 @@ class LWJGLSoundComponent(name : Symbol) extends SoundComponent(name) with Entit
    */
   protected def removeFromLocalRep(e: Entity) {
     knownEntities = knownEntities - e
+    if (dontStopOnRemove.contains(e))
+      dontStopOnRemove -= e
+    else
+      stopSoundsFor(e)
   }
 
   private def updateFor(e: Entity, sp : SoundProperties){
@@ -192,7 +210,7 @@ class LWJGLSoundComponent(name : Symbol) extends SoundComponent(name) with Entit
         cParams.getFirstValueFor(types.EventDescription).collect{
           case eDesc => cParams.getFirstValueFor(types.AudioFile).collect{
             case sound =>
-              eDesc.restrictedBy{ case ev => ev.affectedEntities.contains(e) }.observe(handleSoundEvent)
+              eDesc.restrictedBy(EntityMatcher(e).matchEvent).observe(handleSoundEvent)
               eventMapping = eventMapping.updated(e,
                 eventMapping.getOrElse(e, Map[EventDescription, types.AudioFile.dataType]()).updated(eDesc, sound))
           }
@@ -206,9 +224,7 @@ class LWJGLSoundComponent(name : Symbol) extends SoundComponent(name) with Entit
           case eDesc => cParams.getFirstValueFor(types.Container).collect{
             case params => cParams.getFirstValueFor(types.AudioFile).collect{
               case file =>
-                eDesc.restrictedBy{
-                  case event => event.affectedEntities.forall(_.containsSVars(types.Material))
-                }.observe(handleSoundEvent)
+                eDesc.restrictedBy(MaterialMatcher().matchEvent).observe(handleSoundEvent)
                 val list = (e, params, file) :: combinationMapping.getOrElse(eDesc.name, Nil)
                 combinationMapping = combinationMapping + ( eDesc.name -> list)
             }
@@ -237,40 +253,42 @@ class LWJGLSoundComponent(name : Symbol) extends SoundComponent(name) with Entit
       case Symbols.enabled =>
       case Symbols.component =>
       case Symbols.viewPlatform =>
-        e.observe(types.ViewPlatform).first { trafo =>
+        e.observe(types.ViewPlatform).head { trafo =>
           ALListener.setPosition(trafo(3).xyz)
           //TODO: check new simplex values
           ALListener.setOrientation(Vec3(-trafo.m20, -trafo.m21, -trafo.m22), Vec3(trafo.m10, trafo.m11, trafo.m12))
         }
-        e.get(types.ViewPlatform).first { trafo =>
+        e.get(types.ViewPlatform).head { trafo =>
           ALListener.setPosition(trafo(3).xyz)
           //TODO: check new simplex values
           ALListener.setOrientation(Vec3(-trafo.m20, -trafo.m21, -trafo.m22), Vec3(trafo.m10, trafo.m11, trafo.m12))
         }
       case Symbols.audioFile =>
-        e.observe(types.OpenAlProps).first { updateFor(e, _) }
-        e.observe(types.Position).first{ pos => positions = positions.updated(e, pos) }
-        //        e.get(types.Transformation).collect{ case posSVar =>
-        //          println("SETTING SOUND TRANS")
-        //          posSVar.get{     trafo =>
-        //            positions = positions.updated( e, trafo(3).xyz )
-        //            println(trafo(3).xyz) }
-        //          posSVar.observe{ trafo => positions = positions.updated( e, trafo(3).xyz )
-        //        }
-        e.observe(types.AudioFile).first{ file => audioFiles = audioFiles.updated(e, file ) }
-        e.get(types.AudioFile).first{ file => audioFiles = audioFiles.updated(e, file ) }
+        if (aspect.getCreateParams.getFirstValueFor(types.Threshold).getOrElse(-1f) > 0)
+          dontStopOnRemove += e
 
-        e.observe(types.Enabled).first( value => playIt(e)(value) )
-        e.get(types.Enabled).first( value => playIt(e)(value) )
+        e.observe(types.OpenAlProps).head { updateFor(e, _) }
+        e.observe(types.Position).head{ pos => positions = positions.updated(e, pos) }
+
+        e.observe(types.AudioFile).head{ file => audioFiles = audioFiles.updated(e, file ) }
+        e.get(types.AudioFile).head{ file => audioFiles = audioFiles.updated(e, file ) }
+
+        e.observe(types.Enabled).head( value => playIt(e)(value) )
+        e.get(types.Enabled).head{ value =>
+          if (value || aspect.getCreateParams.getFirstValueFor(types.Enabled).getOrElse(false))
+            playIt(e)(really = true)
+        }
       case sem =>
         println("sound component: unknown semantics in entityConfigComplete " + sem.value)
     }
   }
 
+  private var dontStopOnRemove = Set[Entity]()
+
   private def playIt(e : Entity)(really : Boolean){
     if (really) audioFiles.get(e) match {
       case Some(file) =>
-        playFor(e, file, positions.get(e).getOrElse(Vec3.Zero), 1f)
+        playFor(e, file, positions.getOrElse(e, Vec3.Zero), 1f)
       case None =>
     } else
       stopSoundsFor(e)
@@ -292,13 +310,13 @@ class LWJGLSoundComponent(name : Symbol) extends SoundComponent(name) with Entit
 
   private def playFor(entity : Entity, sound : types.AudioFile.dataType, center : ConstVec3, speedFactor : Float){
     playSoundAtWith(entity, sound, center, entity.getSVars(types.Enabled).headOption.collect{ case s => s._2.set(false) },
-      gains.get(entity).getOrElse(0.5F) * speedFactor,
-      loops.get(entity).getOrElse(false), pitches.get(entity).getOrElse(1.0F),
-      maxDistances.get(entity).getOrElse(Float.MaxValue), refDistances.get(entity).getOrElse(1.0F))
+      gains.getOrElse(entity, 0.5F) * speedFactor,
+      loops.getOrElse(entity, false), pitches.getOrElse(entity, 1.0F),
+      maxDistances.getOrElse(entity, Float.MaxValue), refDistances.getOrElse(entity, 1.0F))
   }
 
   private def playAll(e : Event) {
-    val entity = e.affectedEntities.headOption.getOrElse(null)
+    val entity = e.affectedEntities.headOption.orNull
     val fileTasks = e.affectedEntities.map(_.getSVars(types.AudioFile)).map{
       t => if (t.nonEmpty) t.head._2.get(_ : String => Unit)  else (handler : String  => Any ) => handler("") : Unit
     }
